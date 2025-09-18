@@ -2,12 +2,19 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const admin = require("firebase-admin");
+const serviceAccount = require("./library-manager-firebase-private-key.json");
 const app = express();
 const port = 3000;
 
 // Middleware
 app.use(express.json());
 app.use(cors());
+
+// firebase admin config
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
 
 // Mongodb Config
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASSWORD}@cluster0.2dlckac.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
@@ -19,6 +26,28 @@ const client = new MongoClient(uri, {
   },
 });
 
+// custom MiddleWar
+const verifyFirebaseToken = (req, res, next) => {
+  const token = req.headers.authorization;
+  if (!token) return res.status(401).send("Unauthorized User");
+  admin
+    .auth()
+    .verifyIdToken(token)
+    .then((res) => {
+      req.headers.authEmail = res.email;
+      next();
+    })
+    .catch((error) => res.status(401).send("Unauthorized User"));
+};
+
+const verifyAuthEmail = (req, res, next) => {
+  const authEmail = req.headers.authEmail;
+  const queryEamil = req.params.email || req.query.email;
+
+  if (authEmail != queryEamil) return res.status(403).send("Forbidden Error");
+  next();
+};
+
 async function run() {
   try {
     // start wokring from here
@@ -26,60 +55,80 @@ async function run() {
     const booksColl = database.collection("Books");
 
     app.get("/", (req, res) => {
-      res.send("Library Manager Server is Running Well!");
+      return res.send("Library Manager Server is Running Well!");
     });
 
     // book related api's
     app.get("/books", async (req, res) => {
       try {
-        console.log(req?.header?.authorization);
-
-        const { email } = req.query;
-        let query = {};
-        if (email) {
-          query.addedBy = email;
-        }
-        const result = await booksColl.find(query).toArray();
-        res.send(result);
+        const result = await booksColl.find().toArray();
+        return res.send(result);
       } catch (error) {
         console.error("Error fetching books:", error);
-        res.status(500).send({ message: "Internal Server Error" });
+        return res.status(500).send({ message: "Internal Server Error" });
       }
     });
 
-    app.post("/books", async (req, res) => {
+    app.get(
+      "/books/:email",
+      verifyFirebaseToken,
+      verifyAuthEmail,
+      async (req, res) => {
+        try {
+          const { email } = req.params;
+
+          let query = { addedBy: email };
+          const result = await booksColl.find(query).toArray();
+          return res.send(result);
+        } catch (error) {
+          console.error("Error fetching books:", error);
+          return res.status(500).send({ message: "Internal Server Error" });
+        }
+      }
+    );
+
+    app.post("/books", verifyFirebaseToken, async (req, res) => {
       const newBook = req.body;
       const result = await booksColl.insertOne(newBook);
-      res.send(result);
+      return res.send(result);
     });
 
-    app.put("/books/:book_id", async (req, res) => {
+    app.put("/books/:book_id", verifyFirebaseToken, async (req, res) => {
       try {
         const { book_id } = req.params;
+        const authEmail = req.headers.authEmail;
+        const query = { _id: new ObjectId(book_id) };
+        const book = await booksColl.findOne(query);
+
+        if (authEmail !== book.addedBy)
+          return res.status(403).send("Forbiden Acess");
+
         const updatedBook = { ...req.body };
         // Remove _id if it exists
         delete updatedBook._id;
-        const query = { _id: new ObjectId(book_id) };
         const updateDoc = { $set: updatedBook };
-
         const result = await booksColl.updateOne(query, updateDoc);
-        res.send(result);
+        return res.send(result);
       } catch (error) {
         console.error("Error updating book:", error);
-        res.status(500).send({ message: "Internal Server Error" });
+        return res.status(500).send({ message: "Internal Server Error" });
       }
     });
 
-    app.delete("/books/:book_id", async (req, res) => {
+    app.delete("/books/:book_id", verifyFirebaseToken, async (req, res) => {
       try {
         const { book_id } = req.params;
-
+        const authEmail = req.headers.authEmail;
         const query = { _id: new ObjectId(book_id) };
+        const book = await booksColl.findOne(query);
+        if (authEmail !== book.addedBy)
+          return res.status(403).send("Forbiden Acess");
+
         const result = await booksColl.deleteOne(query);
-        res.send(result);
+        return res.send(result);
       } catch (error) {
         console.error("Error Deleting book:", error);
-        res.status(500).send({ message: "Internal Server Error" });
+        return res.status(500).send({ message: "Internal Server Error" });
       }
     });
 
