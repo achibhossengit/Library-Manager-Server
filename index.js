@@ -80,6 +80,28 @@ async function run() {
       }
     });
 
+    app.get("/books/popular", async (req, res) => {
+      try {
+        const projection = {
+          image: 1,
+          name: 1,
+          author: 1,
+          quantity: 1,
+        };
+
+        const result = await booksColl
+          .find({}, { projection })
+          .sort({ borrowedCount: -1 })
+          .limit(6)
+          .toArray();
+
+        return res.send(result);
+      } catch (error) {
+        console.error("Error fetching popular books:", error);
+        return res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
     app.get("/books/:bookId", async (req, res) => {
       try {
         const { bookId } = req.params;
