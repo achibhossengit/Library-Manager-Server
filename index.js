@@ -96,9 +96,6 @@ async function run() {
       async (req, res) => {
         try {
           const { email } = req.params;
-
-          console.log(email);
-
           let query = { addedBy: email };
           const result = await booksColl.find(query).toArray();
           return res.send(result);
@@ -155,29 +152,55 @@ async function run() {
     });
 
     // borrowed books related api's
-    app.get(
-      "/borrowed-list/user/:email",
-      verifyFirebaseToken,
-      verifyAuthEmail,
-      async (req, res) => {
-        try {
-          const { email } = req.params;
-          const query = { borrowedBy: email };
-          const projection = { bookId: 1, _id: 0 };
+    app.get("/borrowed-list/ids", verifyFirebaseToken, async (req, res) => {
+      try {
+        const authEmail = req.headers.authEmail;
+        const query = { borrowedBy: authEmail };
+        const projection = { bookId: 1, _id: 0 };
 
-          const result = await borrowedColl
-            .find(query, { projection })
-            .toArray();
+        const result = await borrowedColl.find(query, { projection }).toArray();
 
-          const bookIds = result.map((item) => item.bookId);
+        const bookIds = result.map((item) => item.bookId);
 
-          return res.send(bookIds);
-        } catch (error) {
-          console.error("Error fetching borrowed list:", error);
-          return res.status(500).send({ message: "Internal Server Error" });
-        }
+        return res.send(bookIds);
+      } catch (error) {
+        console.error("Error fetching borrowed list:", error);
+        return res.status(500).send({ message: "Internal Server Error" });
       }
-    );
+    });
+
+    app.get("/borrowed-list/books", verifyFirebaseToken, async (req, res) => {
+      try {
+        const authEmail = req.headers.authEmail;
+        const projection = { bookId: 1 };
+        const borrowedRecords = await borrowedColl
+          .find({ borrowedBy: authEmail }, { projection })
+          .toArray();
+
+        if (!borrowedRecords.length) return res.send([]);
+
+        const result = [];
+
+        for (const record of borrowedRecords) {
+          // bad way to aggregate
+          const book = await booksColl.findOne({
+            _id: new ObjectId(record.bookId),
+          });
+          if (book) {
+            // merge borrowedId
+            result.push({
+              ...book,
+              borrowedId: record._id.toString(),
+            });
+          }
+        }
+
+        return res.send(result);
+      } catch (error) {
+        console.error("Error fetching borrowed books:", error);
+        return res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
 
     app.post("/borrowed-list", verifyFirebaseToken, async (req, res) => {
       try {
@@ -201,7 +224,7 @@ async function run() {
         if (result.insertedId) {
           await booksColl.updateOne(
             { _id: new ObjectId(bookId) },
-            { $inc: { quantity: -1, borrowedCount: +1 } }
+            { $inc: { quantity: -1 }, $inc: { borrowedCount: 1 } }
           );
         }
 
@@ -211,6 +234,34 @@ async function run() {
         return res.status(500).send({ message: "Internal Server Error" });
       }
     });
+
+    app.delete(
+      "/borrowed-list/return/:borrow_id",
+      verifyFirebaseToken,
+      async (req, res) => {
+        try {
+          const { borrow_id } = req.params;
+          const authEmail = req.headers.authEmail;
+          const borrowDoc = await borrowedColl.findOne({
+            _id: new ObjectId(borrow_id),
+          });
+          if (!borrowDoc)
+            return res.status(404).send({ message: "Borrow id is invalid!" });
+
+          // check authorization
+          if (authEmail !== borrowDoc.borrowedBy)
+            return res.status(401).send("Unauthorized User");
+
+          const result = await borrowedColl.deleteOne({
+            _id: new ObjectId(borrow_id),
+          });
+          return res.send(result);
+        } catch (error) {
+          console.error("Error returing book:", error);
+          return res.status(500).send({ message: "Internal Server Error" });
+        }
+      }
+    );
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
