@@ -42,7 +42,7 @@ const verifyFirebaseToken = (req, res, next) => {
 
 const verifyAuthEmail = (req, res, next) => {
   const authEmail = req.headers.authEmail;
-  const queryEamil = req.params.email || req.query.email;
+  const queryEamil = req?.params?.email || req?.query?.email;
 
   if (authEmail != queryEamil) return res.status(403).send("Forbidden Error");
   next();
@@ -53,6 +53,7 @@ async function run() {
     // start wokring from here
     const database = client.db("LibraryManagerDB");
     const booksColl = database.collection("Books");
+    const borrowedColl = database.collection("BorrowedList");
 
     app.get("/", (req, res) => {
       return res.send("Library Manager Server is Running Well!");
@@ -61,7 +62,14 @@ async function run() {
     // book related api's
     app.get("/books", async (req, res) => {
       try {
-        const result = await booksColl.find().toArray();
+        const projection = {
+          image: 1,
+          name: 1,
+          author: 1,
+          quantity: 1,
+        };
+        const query = {};
+        const result = await booksColl.find(query, { projection }).toArray();
         return res.send(result);
       } catch (error) {
         console.error("Error fetching books:", error);
@@ -69,13 +77,27 @@ async function run() {
       }
     });
 
+    app.get("/books/:bookId", async (req, res) => {
+      try {
+        const { bookId } = req.params;
+        const query = { _id: new ObjectId(bookId) };
+        const result = await booksColl.findOne(query);
+        return res.send(result);
+      } catch (error) {
+        console.error("Error fetching book:", error);
+        return res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
     app.get(
-      "/books/:email",
+      "/books/user/:email",
       verifyFirebaseToken,
       verifyAuthEmail,
       async (req, res) => {
         try {
           const { email } = req.params;
+
+          console.log(email);
 
           let query = { addedBy: email };
           const result = await booksColl.find(query).toArray();
@@ -128,6 +150,64 @@ async function run() {
         return res.send(result);
       } catch (error) {
         console.error("Error Deleting book:", error);
+        return res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+    // borrowed books related api's
+    app.get(
+      "/borrowed-list/user/:email",
+      verifyFirebaseToken,
+      verifyAuthEmail,
+      async (req, res) => {
+        try {
+          const { email } = req.params;
+          const query = { borrowedBy: email };
+          const projection = { bookId: 1, _id: 0 };
+
+          const result = await borrowedColl
+            .find(query, { projection })
+            .toArray();
+
+          const bookIds = result.map((item) => item.bookId);
+
+          return res.send(bookIds);
+        } catch (error) {
+          console.error("Error fetching borrowed list:", error);
+          return res.status(500).send({ message: "Internal Server Error" });
+        }
+      }
+    );
+
+    app.post("/borrowed-list", verifyFirebaseToken, async (req, res) => {
+      try {
+        const bookId = req.body.bookId;
+        const authEmail = req.headers.authEmail;
+        // check book availability
+        const book = await booksColl.findOne({ _id: new ObjectId(bookId) });
+        if (!book) return res.status(404).send({ message: "Book not found!" });
+        if (book.quantity <= 0)
+          return res
+            .status(400)
+            .send({ message: "Book is not available to borrow!" });
+
+        // insert borrowed record
+        const result = await borrowedColl.insertOne({
+          bookId: bookId,
+          borrowedBy: authEmail,
+        });
+
+        // decrease quantity if successfully borrowed
+        if (result.insertedId) {
+          await booksColl.updateOne(
+            { _id: new ObjectId(bookId) },
+            { $inc: { quantity: -1, borrowedCount: +1 } }
+          );
+        }
+
+        return res.send(result);
+      } catch (error) {
+        console.error("Error borrowing book:", error);
         return res.status(500).send({ message: "Internal Server Error" });
       }
     });
