@@ -54,6 +54,7 @@ async function run() {
     const database = client.db("LibraryManagerDB");
     const booksColl = database.collection("Books");
     const borrowedColl = database.collection("BorrowedList");
+    const categoryColl = database.collection("Categories");
 
     app.get("/", (req, res) => {
       return res.send("Library Manager Server is Running Well!");
@@ -232,6 +233,17 @@ async function run() {
       } catch (error) {
         console.error("Error borrowing book:", error);
         return res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+    // categories
+    app.get("/categories", async (req, res) => {
+      try {
+        const result = await categoryColl.find().toArray();
+        return res.send(result);
+      } catch (error) {
+        console.log(error);
+        return res.status(500).send("Server Error");
       }
     });
 
