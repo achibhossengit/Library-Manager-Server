@@ -63,13 +63,15 @@ async function run() {
     // book related api's
     app.get("/books", async (req, res) => {
       try {
+        const { category } = req.query;
+        let query = {};
+        if (category) query = { category: category };
         const projection = {
           image: 1,
           name: 1,
           author: 1,
           quantity: 1,
         };
-        const query = {};
         const result = await booksColl.find(query, { projection }).toArray();
         return res.send(result);
       } catch (error) {
@@ -236,17 +238,6 @@ async function run() {
       }
     });
 
-    // categories
-    app.get("/categories", async (req, res) => {
-      try {
-        const result = await categoryColl.find().toArray();
-        return res.send(result);
-      } catch (error) {
-        console.log(error);
-        return res.status(500).send("Server Error");
-      }
-    });
-
     app.delete(
       "/borrowed-list/return/:borrow_id",
       verifyFirebaseToken,
@@ -254,6 +245,8 @@ async function run() {
         try {
           const { borrow_id } = req.params;
           const authEmail = req.headers.authEmail;
+
+          // find borrow record
           const borrowDoc = await borrowedColl.findOne({
             _id: new ObjectId(borrow_id),
           });
@@ -264,16 +257,37 @@ async function run() {
           if (authEmail !== borrowDoc.borrowedBy)
             return res.status(401).send("Unauthorized User");
 
+          // delete borrowed record
           const result = await borrowedColl.deleteOne({
             _id: new ObjectId(borrow_id),
           });
+
+          if (result.deletedCount > 0) {
+            // increase book quantity after return
+            await booksColl.updateOne(
+              { _id: new ObjectId(borrowDoc.bookId) },
+              { $inc: { quantity: 1 } }
+            );
+          }
+
           return res.send(result);
         } catch (error) {
-          console.error("Error returing book:", error);
+          console.error("Error returning book:", error);
           return res.status(500).send({ message: "Internal Server Error" });
         }
       }
     );
+
+    // categories
+    app.get("/categories", async (req, res) => {
+      try {
+        const result = await categoryColl.find().toArray();
+        return res.send(result);
+      } catch (error) {
+        console.log(error);
+        return res.status(500).send("Server Error");
+      }
+    });
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
